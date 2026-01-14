@@ -9,7 +9,7 @@ from pyroomacoustics.doa import circ_dist
 # We define a meaningful distance measure on the circle
 
 # Location of original source
-azimuth = 61.0 / 180.0 * np.pi  # 60 degrees
+azimuth = 170.0 / 180.0 * np.pi  # 60 degrees
 distance = 3.0  # 3 meters
 dim = 2  # dimensions (2 or 3)
 room_dim = np.r_[10.0, 10.0]
@@ -47,7 +47,7 @@ source_location = room_dim / 2 + distance * np.r_[np.cos(azimuth), np.sin(azimut
 source_signal = np.random.randn((nfft // 2 + 1) * nfft)
 aroom.add_source(source_location, signal=source_signal)
 
-# We use a circular array with radius 15 cm # and 12 microphones
+# We use a linear array of 4 microphones
 R = pra.linear_2D_array(room_dim/2, 4, 0, 0.0635)
 aroom.add_microphone_array(pra.MicrophoneArray(R, fs=aroom.fs))
 

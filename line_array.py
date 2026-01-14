@@ -1,4 +1,7 @@
 # every mic is spaced 6.35 cm apart, track 1 is the leftmost, track 4 the rightmost
+# I am taking the example code provided in the library's Github to start and modifying
+# it to work with my type of files and my specific problems.
+# The provided function to plot the data was also throwing errors, so I created my own.
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -10,25 +13,32 @@ from scipy.io import wavfile
 # PARAMETERS
 # -----------------------------
 fs = 48000
-nfft = 2048
-mic_spacing = 0.0635  # 5 cm
+nfft = 1024
+c = 343.0  # speed of sound
+mic_spacing = 0.0635  # 6.35 cm
 num_mics = 4
-signal_duration = 10.0  # seconds
+freq_bins = np.arange(5, 60)  # FFT bins to use for estimation
+valid_algorithms = [
+    "SRP",
+    # "MUSIC",
+    # "CSSM",
+    # "WAVES",
+]
+chunk_duration = 0.1  # seconds
+chunk_samples = int(chunk_duration * fs)
+hop_samples = chunk_samples // 2  # 50% overlap
+
 
 # -----------------------------
 # MICROPHONE ARRAY GEOMETRY
 # (4 microphones inline along x-axis)
 # -----------------------------
-mic_positions = np.array([
-    [0.0, mic_spacing, 2*mic_spacing, 3*mic_spacing],
-    [0.0, 0.0,         0.0,           0.0],
-    [0.0, 0.0,         0.0,           0.0]
-])
+R = pra.linear_2D_array([0,0], 4, 0, mic_spacing)
+
 
 # -----------------------------
 # LOAD SIGNALS AND COMBINE IN ONE
 # -----------------------------
-
 files = [
     "4mic_array/Tr1.wav",
     "4mic_array/Tr2.wav",
@@ -55,49 +65,92 @@ for f in files:
 
 signals = np.stack(signals, axis=0)
 
+# -----------------------------
+# Break down the signals in chunks
+# -----------------------------
+def chunk_signals(signals, chunk_samples, hop_samples):
+    num_mics, num_samples = signals.shape
+    for start in range(0, num_samples - chunk_samples, hop_samples):
+        yield signals[:, start : start + chunk_samples]
+
 
 # -----------------------------
-# SRP-PHAT DOA ESTIMATION
+# PLOTTING
 # -----------------------------
-doa = SRP(
-    mic_positions,
-    fs=fs,
-    nfft=nfft,
-    num_src=1,
-    mode="far"
-)
+def plot_doa_polar(azimuth_est, azimuth_true=None, title="DOA"):
+    """
+    azimuth_est : scalar or array-like (radians)
+    azimuth_true: scalar (radians) or None
+    """
+    azimuth_est = np.atleast_1d(azimuth_est)
 
-doa.locate_sources(signals)
+    fig = plt.figure()
+    ax = fig.add_subplot(111, polar=True)
 
-# Estimated angle
-estimated_azimuth = doa.azimuth_recon[0]
-estimated_azimuth_deg = np.rad2deg(estimated_azimuth)
+    # Estimated DOAs (red)
+    for az in azimuth_est:
+        ax.plot([az, az], [0, 1.0], "r-", linewidth=2)
 
-print(f"Estimated DOA: {estimated_azimuth_deg:.2f} degrees")
+    # True DOA (green)
+    if azimuth_true is not None:
+        ax.plot([azimuth_true, azimuth_true], [0, 1.0], "g--", linewidth=2)
+
+    ax.set_rmax(1.0)
+    ax.set_rticks([])
+    ax.set_theta_zero_location("E")   # 0° = +x axis
+    ax.set_theta_direction(1)          # CCW positive
+    ax.set_title(title)
+
+    return ax
 
 # -----------------------------
-# VISUALIZATION (POLAR PLOT)
+# Compute the STFT frames needed
 # -----------------------------
-angles = doa.azimuth_grid
-power = doa.grid.values
+direction_history = []
 
-# Normalize power for plotting
-power = power / np.max(power)
+for chunk in chunk_signals(signals, chunk_samples, hop_samples):
+        X = np.array(
+        [
+            pra.transform.stft.analysis(signal, nfft, nfft // 2).T
+            for signal in signals
+        ]
+        )
 
-plt.figure(figsize=(8, 6))
-ax = plt.subplot(111, polar=True)
+        for algo_name in valid_algorithms:
+            doa = pra.doa.algorithms[algo_name](R, fs, nfft, c=c)
+            doa.locate_sources(X, freq_bins=freq_bins)
 
-ax.plot(angles, power, label="SRP-PHAT response")
-ax.plot(
-    estimated_azimuth,
-    1.0,
-    'ro',
-    label=f"Estimated DOA = {estimated_azimuth_deg:.1f}°"
-)
+            print(algo_name)
+            print(
+                "  Recovered azimuth:",
+                np.atleast_1d(doa.azimuth_recon) / np.pi * 180.0,
+                "degrees",
+            )
+            direction_history.append(doa.azimuth_recon)
 
-ax.set_theta_zero_location("E")
-ax.set_theta_direction(-1)
-ax.set_title("SRP-PHAT Direction of Arrival")
-ax.legend(loc="upper right")
+
+print(direction_history)
+print(len(direction_history))
+
+# -----------------------------
+# Calculate using multiple algorithms to compare
+# -----------------------------
+
+# for algo_name in valid_algorithms:
+#     doa = pra.doa.algorithms[algo_name](R, fs, nfft, c=c)
+#     doa.locate_sources(X, freq_bins=freq_bins)
+#
+#     plot_doa_polar(
+#         azimuth_est=doa.azimuth_recon,
+#         title=algo_name,
+#     )
+#
+#     print(algo_name)
+#     print(
+#         "  Recovered azimuth:",
+#         np.atleast_1d(doa.azimuth_recon) / np.pi * 180.0,
+#         "degrees",
+#     )
+
 
 plt.show()

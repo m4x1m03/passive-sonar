@@ -11,8 +11,9 @@ I am making use of the Pyroomacoustics library in this project as it does a lot 
 ## Development Checklist
 
 - [X]  Find azimuth from stereo microphone recording using GCC PHAT
-- [ ]  Simulate a 4 microphone line array and compare which algorithm is best
-- [ ]  Find azimuth from a real 4 microphone line array 
+- [X]  Simulate a 4 microphone line array and compare which algorithm is best
+- [X]  Find azimuth of a static sound from a real 4 microphone line array
+- [ ]  Modify the program to handle moving sounds
 - [ ]  Build a 2 dimenional mic array 
 - [ ]  Find azimuth and attitude of sound and diplay it nicely
 

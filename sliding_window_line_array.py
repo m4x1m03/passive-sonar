@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 import pyroomacoustics as pra
 from scipy.io import wavfile
 from matplotlib.animation import FuncAnimation
+from filterpy.kalman import KalmanFilter
 
 # -----------------------------
 # PARAMETERS
@@ -22,12 +23,7 @@ freq_bins = np.arange(5, 60)  # FFT bins to use for estimation (235Hz-2.767kHz r
 chunk_duration = 0.1  # seconds
 chunk_size = int(chunk_duration * fs)
 hop_size = chunk_size // 2
-valid_algorithms = [
-    "SRP",
-    # "MUSIC",
-    # "CSSM",
-    # "WAVES",
-]
+valid_algorithms = "SRP"
 
 # -----------------------------
 # MICROPHONE ARRAY GEOMETRY
@@ -91,19 +87,94 @@ for i in range(num_chunks):
 
     doa.locate_sources(X_chunk, freq_bins=freq_bins)
 
-    if doa.azimuth_recon.size > 0:
-        az = doa.azimuth_recon[0]
-    else:
+
+    if doa.azimuth_recon.size == 0:
         az = np.nan
+    else:
+        az = doa.azimuth_recon[0]
 
     azimuths.append(az)
     times.append(start / fs)
 
 
 # -----------------------------
+# Kalman Filter for noise reduction
+# -----------------------------
+#mostly implemented using wikipedia formulas and library resources
+dt = hop_size / fs
+kf = KalmanFilter(dim_x=2, dim_z=1)
+
+# State transition matrix (assume constat angular velocity)
+# this assumption does not mean we assume one single constant velocity
+kf.F = np.array([
+    [1, dt],
+    [0, 1]
+])
+
+# Measurement function (only care about angle since we do not have velocity)
+kf.H = np.array([[1, 0]])
+
+# Covariance matrix
+kf.P *= 10.0
+
+# Measurement noise (12 degree variance)
+# we can use lambda/2*pi*D to calculate the standard deviation of an angle for
+# lambda = c/f and D is the mic array aperture (here 19cm)
+# So for a frequency of 2.7kHz, we have a stdev of 6 degrees
+expected_angle_stdev = 12 # what standard deviation we expect on average
+kf.R = np.array([[(expected_angle_stdev * np.pi / 180)**2]])
+
+# Process noise (how much we want to allow changes of direction)
+max_angular_vel = 120 # maximum angular speed expected
+change_dir_time = 0.3 # how many seconds for the speed to change
+sigma_alpha = np.radians(max_angular_vel/change_dir_time)
+kf.Q = sigma_alpha**2 * np.array([
+    [dt**4/4, dt**3/2],
+    [dt**3/2, dt**2]
+])
+
+#need to wrap the measurements to not have crazy difference between measurements
+def wrap_angle(a):
+    return (a + np.pi) % (2 * np.pi) - np.pi
+
+#initial state is set using the first azimuth computed
+for az in azimuths:
+    if not np.isnan(az):
+        #initialization matrix
+        kf.x = np.array([[az], [0.0]])
+        break
+
+filtered_azimuths = []
+
+for az in azimuths:
+    kf.predict()
+    if not np.isnan(az):
+        # Innovation with angle wrapping
+        z = np.array([[az]])
+        y = wrap_angle(z[0, 0] - kf.x[0, 0])
+        kf.update(np.array([[kf.x[0,0] + y]]))
+
+    kf.x[0,0] = wrap_angle(kf.x[0,0])
+    filtered_azimuths.append(kf.x[0,0])
+
+filtered_azimuths = np.array(filtered_azimuths)
+
+
+# -----------------------------
+# Get all angles to the front (invert negative ones)
+# -----------------------------
+def forward_azimuth(az):
+    if np.isnan(az):
+        return np.nan
+    elif(az) < 0 or az > np.pi:
+        az = np.atleast_1d(az)
+        return az-np.pi
+    else:
+        return az
+
+# -----------------------------
 # Plot DOA from SRP and animated
 # -----------------------------
-azimuths_deg = np.array(azimuths) * 180 / np.pi
 azimuths = np.array(azimuths)
 times = np.array(times)
 
@@ -122,10 +193,12 @@ ax.set_rmax(1.0)
 ax.set_rticks([])
 ax.set_theta_zero_location("E")   # 0° = +x
 ax.set_theta_direction(1)         # CCW
+ax.set_thetamin(0)
+ax.set_thetamax(180)
 ax.set_title("DOA Tracking (0.1 s chunks)")
 
 def update(frame):
-    az = azimuths[frame]
+    az = forward_azimuth(filtered_azimuths[frame])
 
     if np.isnan(az):
         doa_line.set_data([], [])

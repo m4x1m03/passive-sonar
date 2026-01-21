@@ -24,7 +24,6 @@ chunk_duration = 0.1  # seconds
 chunk_size = int(chunk_duration * fs)
 hop_size = chunk_size // 2
 valid_algorithms = "SRP"
-threshold_peak = 1.75 # used for filtering out the silent chunks (static but need to make it dynamic in the future)
 
 # -----------------------------
 # MICROPHONE ARRAY GEOMETRY
@@ -69,7 +68,7 @@ num_samples = signals.shape[1]
 num_chunks = (num_samples - chunk_size) // hop_size + 1
 times = []
 azimuths = []
-valid_measurement = []
+srp_confidence = []
 
 
 doa = pra.doa.algorithms[valid_algorithms](R, fs, nfft, c=c, max_four=4)
@@ -90,16 +89,41 @@ for i in range(num_chunks):
 
     doa.locate_sources(X_chunk, freq_bins=freq_bins)
 
+    # get confidence of measurement
+    grid = doa.grid.values
+    peak = grid.max()
+    mu = grid.mean()
+    sigma = grid.std()
+    confidence = (peak - mu) / sigma
+    srp_confidence.append(confidence)
 
-    if doa.azimuth_recon.size == 0 or doa.grid.values.max() < threshold_peak:
-        az = np.nan
-        valid_measurement.append(False)
-    else:
-        az = doa.azimuth_recon[0]
-        valid_measurement.append(True)
+    az = doa.azimuth_recon[0] if doa.azimuth_recon.size > 0 else np.nan
 
     azimuths.append(az)
     times.append(start / fs)
+
+
+# -----------------------------
+# Settings for Kalman confidence in result
+# -----------------------------
+min_stdev_deg = 3.0
+max_stdev_deg = 45.0
+conf = np.array(srp_confidence)
+conf = conf[np.isfinite(conf)]
+#calculate the reference confidence based on the percentile of confidences
+confidence_ref = np.percentile(conf, 80)
+#clamp it to prevent overtrust or total rejection
+confidence_ref = np.clip(confidence_ref, 2.0, 6.0)
+
+
+# -----------------------------
+# Map SRP confidence to measurement covariance
+# -----------------------------
+def confidence_to_R(conf):
+    conf = np.clip(conf, 0.5, 10.0)
+    stdev_deg = max_stdev_deg * (confidence_ref / conf)
+    stdev_deg = np.clip(stdev_deg, min_stdev_deg, max_stdev_deg)
+    return np.array([[(np.deg2rad(stdev_deg))**2]])
 
 
 # -----------------------------
@@ -151,22 +175,24 @@ for az in azimuths:
 
 filtered_azimuths = []
 
-for az, valid in zip(azimuths, valid_measurement):
-    if valid:
-        kf.predict()
+for az, conf in zip(azimuths, srp_confidence):
+    kf.predict()
 
-        z = np.array([[az]])
-        y = wrap_angle(z[0, 0] - kf.x[0, 0])
-        kf.update(np.array([[kf.x[0,0] + y]]))
+    if not np.isnan(az):
+        # Update measurement noise dynamically
+        kf.R = confidence_to_R(conf)
 
-        kf.x[0, 0] = wrap_angle(kf.x[0, 0])
-        filtered_azimuths.append(kf.x[0, 0])
+        # Wrapped innovation
+        y = wrap_angle(az - kf.x[0, 0])
+        z_wrapped = kf.x[0, 0] + y
+
+        kf.update(np.array([[z_wrapped]]))
     else:
-        # Peak is under threshold so don't output a prediction
-        filtered_azimuths.append(np.nan)
-        # Inflate uncertainty by 5% for every chunk with no signal
-        kf.P *= 1.05
+        # No measurement → prediction only
+        kf.P *= 1.05  # slight uncertainty inflation
 
+    kf.x[0, 0] = wrap_angle(kf.x[0, 0])
+    filtered_azimuths.append(kf.x[0, 0])
 
 filtered_azimuths = np.array(filtered_azimuths)
 
@@ -182,6 +208,7 @@ def forward_azimuth(az):
         return az-np.pi
     else:
         return az
+
 
 # -----------------------------
 # Plot DOA from SRP and animated (prototype so fine with matplotlib but need to upgrade)

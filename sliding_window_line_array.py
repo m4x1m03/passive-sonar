@@ -17,7 +17,7 @@ from filterpy.kalman import KalmanFilter
 fs = 48000
 nfft = 1024
 c = 343.0  # speed of sound
-mic_spacing = 0.0635  # 6.35 cm (not good for low-end frequencies)
+mic_spacing = 0.2  # 6.35 cm (not good for low-end frequencies)
 num_mics = 4
 freq_bins = np.arange(5, 60)  # FFT bins to use for estimation (235Hz-2.767kHz range)
 chunk_duration = 0.1  # seconds
@@ -35,10 +35,10 @@ R = pra.linear_2D_array([0,0], 4, 0, mic_spacing)
 # LOAD SIGNALS AND COMBINE IN ONE
 # -----------------------------
 files = [
-    "4mic_array/Raw_Test_Samples/260114_155735/260114_155735_Tr1.wav",
-    "4mic_array/Raw_Test_Samples/260114_155735/260114_155735_Tr2.wav",
-    "4mic_array/Raw_Test_Samples/260114_155735/260114_155735_Tr3.wav",
-    "4mic_array/Raw_Test_Samples/260114_155735/260114_155735_Tr4.wav"
+    "4mic_array/Raw_Test_Samples/20cm/260123_095841/260123_095841_TR1.wav",
+    "4mic_array/Raw_Test_Samples/20cm/260123_095841/260123_095841_TR2.wav",
+    "4mic_array/Raw_Test_Samples/20cm/260123_095841/260123_095841_TR3.wav",
+    "4mic_array/Raw_Test_Samples/20cm/260123_095841/260123_095841_TR4.wav"
 ]
 
 signals = []
@@ -71,7 +71,7 @@ azimuths = []
 srp_confidence = []
 
 
-doa = pra.doa.algorithms[valid_algorithms](R, fs, nfft, c=c, max_four=4)
+doa = pra.doa.algorithms[valid_algorithms](R, fs, nfft, c=c, max_four=4, azimuth=np.linspace(0, np.pi, 180))
 
 for i in range(num_chunks):
     start = i * hop_size
@@ -102,6 +102,21 @@ for i in range(num_chunks):
     azimuths.append(az)
     times.append(start / fs)
 
+
+#need to wrap the measurements to not have crazy difference between measurements
+def wrap_angle(a):
+    return (a + np.pi) % (2 * np.pi) - np.pi
+
+
+def map_to_front_hemisphere(az):
+    if np.isnan(az):
+        return np.nan
+    az = wrap_angle(az)  # Wrap to [-π, π]
+    if az < 0:
+        az = -az  # Mirror to positive side
+    return az
+
+azimuths_front = [map_to_front_hemisphere(az) for az in azimuths]
 
 # -----------------------------
 # Settings for Kalman confidence in result
@@ -154,20 +169,18 @@ expected_angle_stdev = 12 # what standard deviation we expect on average
 kf.R = np.array([[(expected_angle_stdev * np.pi / 180)**2]])
 
 # Process noise (how much we want to allow changes of direction)
-max_angular_vel = 120 # maximum angular speed expected
-change_dir_time = 0.3 # how many seconds for the speed to change
+max_angular_vel = 90 # maximum angular speed expected
+change_dir_time = 0.5 # how many seconds for the speed to change
 sigma_alpha = np.radians(max_angular_vel/change_dir_time)
 kf.Q = sigma_alpha**2 * np.array([
     [dt**4/4, dt**3/2],
     [dt**3/2, dt**2]
 ])
 
-#need to wrap the measurements to not have crazy difference between measurements
-def wrap_angle(a):
-    return (a + np.pi) % (2 * np.pi) - np.pi
+
 
 #initial state is set using the first azimuth computed
-for az in azimuths:
+for az in azimuths_front:
     if not np.isnan(az):
         #initialization matrix
         kf.x = np.array([[az], [0.0]])
@@ -175,7 +188,7 @@ for az in azimuths:
 
 filtered_azimuths = []
 
-for az, conf in zip(azimuths, srp_confidence):
+for az, conf in zip(azimuths_front, srp_confidence):
     kf.predict()
 
     if not np.isnan(az):
@@ -183,7 +196,7 @@ for az, conf in zip(azimuths, srp_confidence):
         kf.R = confidence_to_R(conf)
 
         # Wrapped innovation
-        y = wrap_angle(az - kf.x[0, 0])
+        y = az - kf.x[0, 0]
         z_wrapped = kf.x[0, 0] + y
 
         kf.update(np.array([[z_wrapped]]))
@@ -191,23 +204,10 @@ for az, conf in zip(azimuths, srp_confidence):
         # No measurement → prediction only
         kf.P *= 1.05  # slight uncertainty inflation
 
-    kf.x[0, 0] = wrap_angle(kf.x[0, 0])
+    kf.x[0, 0] = kf.x[0, 0] % np.pi
     filtered_azimuths.append(kf.x[0, 0])
 
 filtered_azimuths = np.array(filtered_azimuths)
-
-
-# -----------------------------
-# Get all angles to the front (invert negative ones)
-# -----------------------------
-def forward_azimuth(az):
-    if np.isnan(az):
-        return np.nan
-    elif(az) < 0 or az > np.pi:
-        az = np.atleast_1d(az)
-        return az-np.pi
-    else:
-        return az
 
 
 # -----------------------------
@@ -220,7 +220,8 @@ fig = plt.figure()
 ax = fig.add_subplot(111, polar=True)
 
 # Initial DOA line
-(doa_line,) = ax.plot([0, 0], [0, 1.0], "r-", linewidth=2)
+(doa_line,) = ax.plot([], [], "r-", linewidth=2)
+
 
 # Time text
 time_text = ax.text(
@@ -236,10 +237,11 @@ ax.set_thetamax(180)
 ax.set_title("DOA Tracking (0.1 s chunks)")
 
 def update(frame):
-    az = forward_azimuth(filtered_azimuths[frame])
+    az = filtered_azimuths[frame]
 
     if np.isnan(az):
         doa_line.set_data([], [])
+
     else:
         doa_line.set_data([az, az], [0, 1.0])
 

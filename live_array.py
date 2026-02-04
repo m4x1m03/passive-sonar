@@ -14,7 +14,7 @@ import pyaudio
 fs = 48000
 nfft = 1024
 c = 343.0  # speed of sound
-mic_spacing = 0.2  # 20 cm
+mic_spacing = 0.2  # 10 cm
 num_mics = 4
 freq_bins = np.arange(5, 60)  # FFT bins to use for estimation (235Hz-2.767kHz range)
 valid_algorithms = "SRP"
@@ -24,6 +24,8 @@ CHUNK = 2048
 FORMAT = pyaudio.paInt16
 CHANNELS = 4
 RATE = 48000  # Match fs
+INPUT_DEVICE_CHANNELS = 6  # Total channels available on the device
+CHANNEL_START = 2  # Start at channel 2 (0-indexed)
 
 # Processing parameters
 WINDOW_MS = 100
@@ -34,7 +36,7 @@ HOP_SIZE = WINDOW_SIZE // 2
 # MICROPHONE ARRAY GEOMETRY
 # (4 microphones inline along x-axis)
 # -----------------------------
-R = pra.linear_2D_array([0, 0], 4, 0, mic_spacing)
+R = pra.linear_2D_array([0, 0], num_mics, 0, mic_spacing)
 
 # -----------------------------
 # Kalman Filter Settings
@@ -129,18 +131,20 @@ class SonarArray:
                 buffer_array = np.array(list(self.audio_buffer)[-WINDOW_SIZE * CHANNELS :])
 
                 # Reshape to (num_channels, num_samples)
-                # PyAudio interleaves: [ch0_s0, ch1_s0, ch2_s0, ch3_s0, ch0_s1, ...]
+                # PyAudio interleaves: [ch0_s0, ch1_s0, ..., ch5_s0, ch0_s1, ...]
                 signals = np.zeros((CHANNELS, WINDOW_SIZE))
                 for ch in range(CHANNELS):
-                    signals[ch, :] = buffer_array[ch::CHANNELS]
+                    # Extract channels 2-5 (indices 2, 3, 4, 5)
+                    channel_idx = ch + 2  # Offset by 2 to get channels 2-5
+                    signals[ch, :] = buffer_array[channel_idx::6]  # Change from 4 to 6
 
                 # Check if signals are too quiet (skip silent windows)
-                max_amplitude = np.max(np.abs(signals))
-                if max_amplitude < 0.01:  # Threshold for silence
-                    # Keep previous angle
-                    if len(self.filtered_angles) > 0:
-                        self.filtered_angles.append(self.filtered_angles[-1])
-                    return
+                # max_amplitude = np.max(np.abs(signals))
+                # if max_amplitude < 0.01:  # Threshold for silence
+                #     # Keep previous angle
+                #     if len(self.filtered_angles) > 0:
+                #         self.filtered_angles.append(self.filtered_angles[-1])
+                #     return
 
                 # Compute STFT for each channel
                 X_chunk = np.array(
@@ -227,9 +231,10 @@ class SonarArray:
         """Start audio capture stream"""
         self.running = True
         try:
+            # Open stream with all available channels
             self.stream = self.p.open(
                 format=FORMAT,
-                channels=CHANNELS,
+                channels=6,  # Open all 6 channels from the device
                 rate=RATE,
                 input=True,
                 frames_per_buffer=CHUNK,
@@ -274,7 +279,7 @@ def main():
     ax.set_theta_direction(1)  # CCW
     ax.set_thetamin(0)
     ax.set_thetamax(180)
-    ax.set_rmax(1.0)
+    ax.set_rlim(0, 1.0)
     ax.set_rticks([])
     ax.set_title("Real-time DOA Tracking (4-Mic Linear Array)", pad=20, fontsize=14, fontweight='bold')
 
@@ -298,7 +303,7 @@ def main():
 
         # Update raw DOA line
         if not np.isnan(raw_az):
-            raw_line.set_data([raw_az, raw_az], [0, 0.8])
+            raw_line.set_data([raw_az, raw_az], [0, 1.0])
         else:
             raw_line.set_data([], [])
 

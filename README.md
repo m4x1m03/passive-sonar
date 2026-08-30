@@ -16,7 +16,7 @@ I am making use of the Pyroomacoustics library in this project as it does a lot 
 
 ![SRP-PHAT Results for single static target](SRP_4Mic_Array_Result.png)
 
-- [ ]  Modify the program to handle moving sounds
+- [X]  Modify the program to handle moving sounds
 - [ ]  Build a 2 dimenional mic array 
 - [ ]  Find azimuth and attitude of sound and diplay it nicely
 

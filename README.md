@@ -8,6 +8,17 @@ To achieve this, I am using beamforming algorithms which works by shifting the m
 
 I am making use of the Pyroomacoustics library in this project as it does a lot of heavy lifting with the complex algorithms used and their great simulation functionality. This being just a proof of concept/prototype, I am not worried about writting everything from scratch, but rather learn the audio concepts and how to apply them in code.
 
+## How to run
+To test it out yourself, you can start the  `live_array.py` file in your prefered IDE (I personaly used PyCharm).
+
+### Modifying to use your own microphone array
+You can modify the `mic_spacing` and `num_mics` parameters at the top of the python file. Use meters for spacing (eg: 0.2 for 20 cm spacing).
+
+Your microphones need to be connected to a sound interface capable of using multiple microphones at the same time. Most commonly, you will find interfaces that can take two microphones only, which does work with this program. Make sure to set your default input device as the interface.
+
+### Noted Issues
+I have had problem running this on windows before. It has to do with the way windows handle multiple chanel inputs. On macOS, it is possible to create an aggregate device, but I have yet to fond a reliable solution. 
+
 ## Development Checklist
 
 - [X]  Find azimuth from stereo microphone recording using GCC PHAT
